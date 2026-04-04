@@ -3,6 +3,7 @@
 """
 Редактор JSON-файла с заменами (ключ → значение)
 Безопасное редактирование с сохранением последней рабочей папки
+Синхронизация с локальным LanguageTool
 """
 
 import sys
@@ -23,7 +24,7 @@ from PyQt5.QtGui import QKeySequence, QFont, QColor, QBrush
 
 
 class ReplacementEditor(QMainWindow):
-    """Главное окно редактора словаря замен"""
+    """Главное окно редактора словаря замен с синхронизацией LanguageTool"""
     
     def __init__(self):
         super().__init__()
@@ -187,6 +188,12 @@ class ReplacementEditor(QMainWindow):
         delete_action.setShortcut(QKeySequence.Delete)
         edit_menu.addAction(delete_action)
         
+        tools_menu = menubar.addMenu("Инструменты")
+        
+        sync_action = QAction("Синхронизировать с LanguageTool", self)
+        sync_action.triggered.connect(self.sync_with_languagetool)
+        tools_menu.addAction(sync_action)
+        
         # Таймер для задержки обновления предпросмотра
         self.preview_timer = QTimer()
         self.preview_timer.setSingleShot(True)
@@ -254,7 +261,7 @@ class ReplacementEditor(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить файл:\n{e}")
             
     def save_data(self, file_path: Path):
-        """Сохранение данных в JSON-файл"""
+        """Сохранение данных в JSON-файл с синхронизацией LanguageTool"""
         try:
             # Проверка валидности данных
             for key, value in self.data.items():
@@ -263,6 +270,7 @@ class ReplacementEditor(QMainWindow):
                 if not key.strip():
                     raise ValueError("Ключ не может быть пустым")
             
+            # Сохраняем JSON
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
             
@@ -270,11 +278,45 @@ class ReplacementEditor(QMainWindow):
             self.set_modified(False)
             self.save_last_path()
             
-            self.status_bar.showMessage(f"Сохранено в {file_path.name}", 3000)
+            # Синхронизация с LanguageTool
+            self._sync_with_languagetool()
+            
+            self.status_bar.showMessage(f"Сохранено в {file_path.name} (синхронизировано с LanguageTool)", 3000)
             self.setWindowTitle(f"Редактор словаря замен - {file_path.name}")
             
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл:\n{e}")
+    
+    def _sync_with_languagetool(self):
+        """Синхронизирует словарь с локальным LanguageTool"""
+        try:
+            # Добавляем путь к проекту для импорта
+            project_path = Path(__file__).parent.parent
+            if str(project_path) not in sys.path:
+                sys.path.insert(0, str(project_path))
+            
+            from core.postprocessor.replacement_dict import ReplacementDictionary
+            
+            # Создаём временный словарь и сохраняем его (автоматически синхронизирует)
+            temp_dict = ReplacementDictionary()
+            temp_dict.data = self.data.copy()
+            temp_dict.save()
+            
+            self.status_bar.showMessage(f"Синхронизировано с LanguageTool: {len(self.data)} правил", 2000)
+            
+        except ImportError as e:
+            self.status_bar.showMessage(f"Модуль не найден: {e}", 3000)
+        except Exception as e:
+            self.status_bar.showMessage(f"Ошибка синхронизации с LanguageTool: {e}", 3000)
+    
+    def sync_with_languagetool(self):
+        """Ручная синхронизация с LanguageTool (из меню)"""
+        if not self.current_file:
+            QMessageBox.warning(self, "Ошибка", "Сначала откройте или создайте словарь")
+            return
+        
+        self._sync_with_languagetool()
+        QMessageBox.information(self, "Синхронизация", f"Словарь синхронизирован с LanguageTool.\n{len(self.data)} правил.")
             
     def open_file(self):
         """Открытие файла"""
@@ -342,7 +384,7 @@ class ReplacementEditor(QMainWindow):
         for row, (key, value) in enumerate(filtered_data.items()):
             # Ключ
             key_item = QTableWidgetItem(key)
-            key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)  # Ключ только для чтения
+            key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 0, key_item)
             
             # Значение
@@ -377,7 +419,7 @@ class ReplacementEditor(QMainWindow):
         
     def on_item_changed(self, item):
         """Обработка изменения значения в таблице"""
-        if item.column() != 1:  # Только изменение значения
+        if item.column() != 1:
             return
             
         row = item.row()
@@ -388,7 +430,6 @@ class ReplacementEditor(QMainWindow):
         key = key_item.text()
         new_value = item.text()
         
-        # Находим оригинальный ключ в данных (учитывая фильтрацию)
         filtered = self.filter_data(self.search_input.text())
         filtered_keys = list(filtered.keys())
         if row < len(filtered_keys):
@@ -398,7 +439,6 @@ class ReplacementEditor(QMainWindow):
                 self.data[original_key] = new_value
                 self.set_modified(True)
                 
-                # Обновляем панель редактирования
                 if self.current_row == row:
                     self.edit_key.setText(original_key)
                     self.edit_value.setText(new_value)
@@ -470,7 +510,6 @@ class ReplacementEditor(QMainWindow):
         if self.current_row < len(filtered_keys):
             old_key = filtered_keys[self.current_row]
             
-            # Проверка на дубликат ключа (если ключ изменен)
             if new_key != old_key and new_key in self.data:
                 QMessageBox.warning(
                     self, "Ошибка",
@@ -478,7 +517,6 @@ class ReplacementEditor(QMainWindow):
                 )
                 return
                 
-            # Обновляем данные
             if new_key != old_key:
                 del self.data[old_key]
             self.data[new_key] = new_value
@@ -486,7 +524,6 @@ class ReplacementEditor(QMainWindow):
             self.set_modified(True)
             self.update_table()
             
-            # Находим новую позицию в таблице
             filtered = self.filter_data(self.search_input.text())
             filtered_keys = list(filtered.keys())
             if new_key in filtered_keys:
@@ -567,7 +604,6 @@ class ReplacementEditor(QMainWindow):
                 self.set_modified(True)
                 self.update_table()
                 
-                # Очищаем панель редактирования
                 self.edit_key.clear()
                 self.edit_value.clear()
                 self.preview_label.clear()
@@ -603,7 +639,6 @@ def main():
     app.setApplicationName("ReplacementEditor")
     app.setOrganizationName("ReplacementEditor")
     
-    # Установка стиля
     app.setStyle('Fusion')
     
     window = ReplacementEditor()

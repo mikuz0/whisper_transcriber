@@ -13,3 +13,6 @@ GUI приложение для распознавания речи из вид�
 3. Установите зависимости:
 ```bash
 pip install -r requirements.txt
+
+
+https://mkuznecov.ru/

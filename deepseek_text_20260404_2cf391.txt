@@ -1,0 +1,9 @@
+gui/
+├── dialogs/
+│   ├── __init__.py
+│   ├── settings_dialog.py      # Главное окно настроек (с вкладками)
+│   ├── model_dialog.py         # Диалог выбора модели
+│   ├── formats_dialog.py       # Диалог выбора форматов
+│   └── postprocess_dialog.py   # Диалог настройки постобработки
+├── main_window.py              # Главное окно (обновлённое)
+└── workers.py                  # Обновлённый (без изменений в логике)

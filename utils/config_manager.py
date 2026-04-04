@@ -1,5 +1,5 @@
 """
-Управление сохранением/загрузкой конфигурации
+config_manager.py - Управление сохранением/загрузкой конфигурации
 """
 
 import json
@@ -14,8 +14,9 @@ class ConfigManager:
     DEFAULT_CONFIG = {
         'work_directory': '',
         'whisper_model': 'base',
-        'language': 'auto',
-        'output_format': 'txt',
+        'output_formats': ['txt'],
+        'postprocess_actions': ['cleanup', 'replacement_dict'],
+        'postprocess_order': ['cleanup', 'replacement_dict'],
         'last_used_tab': 0
     }
     
@@ -29,7 +30,6 @@ class ConfigManager:
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     saved_config = json.load(f)
-                    # Объединяем с дефолтными значениями
                     config = self.DEFAULT_CONFIG.copy()
                     config.update(saved_config)
                     return config

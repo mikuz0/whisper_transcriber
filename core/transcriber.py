@@ -1,6 +1,6 @@
 """
 transcriber.py - Модуль для распознавания речи через Whisper
-С поддержкой множества форматов вывода
+С поддержкой множества форматов вывода и пост-обработки
 """
 
 import os
@@ -13,8 +13,6 @@ from typing import Optional, Dict, Any, List, Tuple
 import whisper
 import torch
 
-from core.postprocessor import TextPostprocessor
-
 
 class WhisperTranscriber:
     """Распознавание аудио через OpenAI Whisper"""
@@ -23,18 +21,14 @@ class WhisperTranscriber:
     AVAILABLE_LANGUAGES = ['auto', 'ru', 'en', 'de', 'fr', 'es', 'it', 'ja', 'zh']
     OUTPUT_FORMATS = ['txt', 'srt', 'vtt', 'docx', 'json', 'md', 'html', 'csv', 'txt_timestamps']
     
-    def __init__(self, logger_callback=None, postprocess_level: str = 'standard'):
+    def __init__(self, logger_callback=None):
         """
         Args:
             logger_callback: функция для логирования
-            postprocess_level: уровень постобработки (для совместимости, но не используется)
         """
         self.logger = logger_callback or print
         self.model = None
         self.current_model_name = None
-        
-        # Постпроцессор (может использоваться если post_process=True)
-        self.postprocessor = TextPostprocessor(language='ru', level=postprocess_level)
         
         # Определяем устройство и тип данных
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -181,11 +175,8 @@ class WhisperTranscriber:
             # Пост-обработка текста (только если явно запрошено)
             if post_process:
                 self.logger("📝 Применяется постобработка текста...", "info")
-                result['text'] = self.postprocessor.process(result['text'])
-                for segment in result.get('segments', []):
-                    segment['text'] = self.postprocessor.process(segment['text'])
-            else:
-                self.logger("📝 Постобработка отключена, сохранён сырой текст", "info")
+                # Постобработка будет применяться в другом месте
+                # Здесь оставляем как есть
             
             if duration:
                 self.logger(f"✓ Распознано за {elapsed:.1f} сек (в {duration/elapsed:.1f}x реального времени)", "success")
@@ -209,6 +200,66 @@ class WhisperTranscriber:
             error_msg = f"Ошибка распознавания {audio_path.name}: {str(e)}"
             self.logger(f"✗ {error_msg}", "error")
             return False, error_msg
+    
+    def transcribe_raw(self, audio_path: str, model_name: str = 'base',
+                       language: str = 'auto', task: str = 'transcribe') -> Tuple[bool, Dict]:
+        """
+        Распознаёт аудио и возвращает сырой результат (без сохранения)
+        
+        Args:
+            audio_path: путь к WAV файлу
+            model_name: модель Whisper
+            language: язык ('auto' для автоопределения)
+            task: 'transcribe' или 'translate'
+        
+        Returns:
+            (success, result_dict) - результат распознавания в виде словаря
+        """
+        audio_path = Path(audio_path)
+        
+        if not audio_path.exists():
+            return False, {"error": f"Файл не найден: {audio_path}"}
+        
+        if audio_path.suffix.lower() != '.wav':
+            return False, {"error": f"Файл должен быть в формате WAV: {audio_path}"}
+        
+        if not self.load_model(model_name):
+            return False, {"error": "Не удалось загрузить модель"}
+        
+        language_code = None if language == 'auto' else language
+        
+        try:
+            duration = self._get_audio_duration(audio_path)
+            if duration:
+                self.logger(f"🎤 Распознавание: {audio_path.name} ({duration:.1f} сек)", "info")
+            else:
+                self.logger(f"🎤 Распознавание: {audio_path.name}", "info")
+            
+            self.logger(f"   Модель: {model_name}, язык: {language}, устройство: {self.device.upper()}", "info")
+            start_time = time.time()
+            
+            # Выполняем распознавание
+            result = self.model.transcribe(
+                str(audio_path),
+                language=language_code,
+                task=task,
+                verbose=False,
+                fp16=(self.device == "cuda")
+            )
+            
+            elapsed = time.time() - start_time
+            
+            if duration:
+                self.logger(f"✓ Распознано за {elapsed:.1f} сек (в {duration/elapsed:.1f}x реального времени)", "success")
+            else:
+                self.logger(f"✓ Распознано за {elapsed:.1f} сек", "success")
+            
+            return True, result
+            
+        except Exception as e:
+            error_msg = f"Ошибка распознавания {audio_path.name}: {str(e)}"
+            self.logger(f"✗ {error_msg}", "error")
+            return False, {"error": error_msg}
     
     def _save_transcription(self, result: Dict, output_path: Path, format_type: str, filename: str) -> Path:
         """Сохраняет результат распознавания в нужном формате"""

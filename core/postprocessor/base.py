@@ -1,54 +1,57 @@
 """
-base.py - Базовый класс постпроцессора
+base.py - Базовый класс постпроцессора с гибкой конфигурацией
 """
 
 import hashlib
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 
 from .text_cleaner import TextCleaner
 from .capitalizer import Capitalizer
 from .replacement_dict import ReplacementDictionary
+from .grammar_checker import GrammarChecker
 
 
 class TextPostprocessor:
     """
-    Гибридный постпроцессор текста
+    Гибридный постпроцессор текста с настраиваемыми действиями
     
-    Этапы обработки:
-    1. Очистка текста (пробелы, знаки препинания)
-    2. Исправление типичных ошибок распознавания (встроенный словарь)
-    3. Словарь замен (пользовательский JSON)
-    4. Капитализация предложений (опционально)
+    Пользователь может выбирать любые действия и устанавливать их порядок.
     """
     
-    LEVEL_MINIMAL = 'minimal'      # только очистка + словарь замен
-    LEVEL_STANDARD = 'standard'    # очистка + словарь замен
-    LEVEL_FULL = 'full'            # + капитализация предложений
+    # Доступные действия и их классы
+    ACTION_CLASSES = {
+        'cleanup': TextCleaner,
+        'replacement_dict': ReplacementDictionary,
+        'capitalization': Capitalizer,
+        'grammar_check': GrammarChecker
+    }
     
-    def __init__(self, language: str = 'ru', level: str = LEVEL_STANDARD, 
-                 cache_dir: Optional[str] = None, logger_callback=None):
+    def __init__(self, language: str = 'ru', 
+                 actions: List[str] = None,
+                 action_order: List[str] = None,
+                 cache_dir: Optional[str] = None, 
+                 logger_callback=None):
         """
         Args:
             language: язык текста ('ru', 'en')
-            level: уровень постобработки
+            actions: список выбранных действий
+            action_order: порядок выполнения действий
             cache_dir: директория для кэша
             logger_callback: функция для логирования
         """
         self.language = language
-        self.level = level
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.logger = logger_callback or print
         
-        # Инициализация компонентов
-        self.cleaner = TextCleaner(language=self.language)
-        self.replacement_dict = ReplacementDictionary(self.logger)
-        self.capitalizer = None
+        # Настройка действий
+        self.actions = actions or ['cleanup', 'replacement_dict']
+        self.action_order = action_order or ['cleanup', 'replacement_dict']
         
-        # Капитализация только для полного уровня
-        if self.level == self.LEVEL_FULL:
-            self.capitalizer = Capitalizer()
+        # Инициализация компонентов
+        self.action_instances = []
+        self._init_actions()
         
         # Статистика
         self.stats = {
@@ -56,12 +59,59 @@ class TextPostprocessor:
             'cache_hits': 0,
             'cache_misses': 0,
             'words_changed': 0,
-            'sentences_capitalized': 0
+            'sentences_capitalized': 0,
+            'grammar_corrections': 0
         }
+    
+    def _init_actions(self):
+        """Инициализирует выбранные действия в заданном порядке"""
+        for action_name in self.action_order:
+            if action_name not in self.actions:
+                continue
+            
+            action_class = self.ACTION_CLASSES.get(action_name)
+            if not action_class:
+                self.logger(f"⚠️ Неизвестное действие: {action_name}", "warning")
+                continue
+            
+            try:
+                if action_name == 'cleanup':
+                    instance = action_class(language=self.language)
+                    self.logger(f"🔧 Инициализировано действие: {action_name}", "info")
+                    
+                elif action_name == 'replacement_dict':
+                    instance = action_class(logger_callback=self.logger)
+                    self.logger(f"🔧 Инициализировано действие: {action_name} ({instance.get_count()} записей)", "info")
+                    
+                elif action_name == 'capitalization':
+                    instance = action_class()
+                    self.logger(f"🔧 Инициализировано действие: {action_name}", "info")
+                    
+                elif action_name == 'grammar_check':
+                    # ВАЖНО: передаём все параметры для корректной работы
+                    lang_code = 'ru-RU' if self.language == 'ru' else 'en-US'
+                    instance = GrammarChecker(
+                        language=lang_code,
+                        logger_callback=self.logger,
+                        use_local=True
+                    )
+                    if instance.tool:
+                        self.logger(f"🔧 Инициализировано действие: {action_name} (локальный сервер)", "info")
+                    else:
+                        self.logger(f"⚠️ Действие {action_name} недоступно", "warning")
+                        
+                else:
+                    instance = action_class()
+                    self.logger(f"🔧 Инициализировано действие: {action_name}", "info")
+                
+                self.action_instances.append((action_name, instance))
+                
+            except Exception as e:
+                self.logger(f"⚠️ Ошибка инициализации {action_name}: {e}", "warning")
     
     def _get_cache_key(self, text: str) -> str:
         """Генерирует ключ для кэша"""
-        content = f"{text}_{self.language}_{self.level}"
+        content = f"{text}_{self.language}_{'_'.join(self.action_order)}"
         return hashlib.md5(content.encode()).hexdigest()
     
     def _load_from_cache(self, key: str) -> Optional[str]:
@@ -100,10 +150,7 @@ class TextPostprocessor:
         """
         Основной метод постобработки текста
         
-        Безопасный подход:
-        - Исправляет только явные ошибки через словарь замен
-        - Не ломает грамматику
-        - Только форматирование
+        Применяет выбранные действия в заданном порядке.
         """
         if not text or not text.strip():
             return text
@@ -117,26 +164,56 @@ class TextPostprocessor:
                 return cached
         
         original_text = text
+        result = text
         
-        # Этап 1: Очистка текста (пробелы, знаки препинания)
-        result = self.cleaner.clean(text)
-        
-        # Этап 2: Исправление типичных ошибок Whisper (встроенный словарь)
-        result = self.cleaner.fix_common_errors(result)
-        
-        # Этап 3: Словарь замен (пользовательский JSON)
-        result = self.replacement_dict.apply(result)
-        
-        # Подсчёт изменений
-        if original_text != result:
-            self.stats['words_changed'] += 1
-        
-        # Этап 4: Капитализация (только для полного уровня)
-        if self.capitalizer:
-            before_cap = result
-            result = self.capitalizer.capitalize(result)
-            if before_cap != result:
-                self.stats['sentences_capitalized'] += 1
+        # Применяем действия последовательно
+        for action_name, action_instance in self.action_instances:
+            before = result
+            
+            try:
+                # Очистка текста
+                if action_name == 'cleanup':
+                    result = action_instance.clean(result)
+                    result = action_instance.fix_common_errors(result)
+                    
+                # Словарь замен
+                elif action_name == 'replacement_dict':
+                    result = action_instance.apply(result)
+                    if before != result:
+                        self.stats['words_changed'] += 1
+                        
+                # Капитализация
+                elif action_name == 'capitalization':
+                    result = action_instance.capitalize(result)
+                    if before != result:
+                        self.stats['sentences_capitalized'] += 1
+                        
+                # Грамматическая проверка
+                elif action_name == 'grammar_check':
+                    if action_instance.tool:
+                        result, changes = action_instance.check_and_report(result)
+                        if changes:
+                            self.stats['grammar_corrections'] += len(changes)
+                            self.logger(f"📝 Грамматические исправления: {len(changes)}", "info")
+                    else:
+                        # Если LanguageTool не доступен, просто пропускаем
+                        pass
+                        
+                # Универсальный вызов (fallback)
+                elif hasattr(action_instance, 'apply'):
+                    result = action_instance.apply(result)
+                elif hasattr(action_instance, 'process'):
+                    result = action_instance.process(result)
+                else:
+                    # fallback
+                    result = action_instance(result) if callable(action_instance) else result
+                
+                # Логируем изменения для отладки
+                if before != result and action_name not in ['grammar_check']:
+                    self.logger(f"   Действие '{action_name}': текст изменён", "debug")
+                    
+            except Exception as e:
+                self.logger(f"⚠️ Ошибка в действии '{action_name}': {e}", "warning")
         
         # Сохранение в кэш
         if cache_key and use_cache and self.cache_dir:
@@ -146,17 +223,7 @@ class TextPostprocessor:
         return result
     
     def process_file(self, input_path: Path, output_path: Path, use_cache: bool = True) -> Tuple[bool, str]:
-        """
-        Обрабатывает файл целиком
-        
-        Args:
-            input_path: путь к исходному файлу
-            output_path: путь для сохранения результата
-            use_cache: использовать ли кэш
-            
-        Returns:
-            (success, message)
-        """
+        """Обрабатывает файл целиком"""
         if not input_path.exists():
             return False, f"Файл не найден: {input_path}"
         
@@ -177,15 +244,23 @@ class TextPostprocessor:
     
     def get_stats(self) -> Dict[str, Any]:
         """Возвращает статистику работы постпроцессора"""
+        # Получаем количество записей в словаре замен, если он активен
+        replacements_count = 0
+        for action_name, action_instance in self.action_instances:
+            if action_name == 'replacement_dict':
+                replacements_count = action_instance.get_count()
+                break
+        
         return {
             'processed': self.stats['processed'],
             'cache_hits': self.stats['cache_hits'],
             'cache_misses': self.stats['cache_misses'],
             'words_changed': self.stats['words_changed'],
             'sentences_capitalized': self.stats['sentences_capitalized'],
-            'level': self.level,
-            'language': self.language,
-            'replacements_count': self.replacement_dict.get_count()
+            'grammar_corrections': self.stats['grammar_corrections'],
+            'actions': self.actions,
+            'action_order': self.action_order,
+            'replacements_count': replacements_count
         }
     
     def reset_stats(self):
@@ -195,10 +270,6 @@ class TextPostprocessor:
             'cache_hits': 0,
             'cache_misses': 0,
             'words_changed': 0,
-            'sentences_capitalized': 0
+            'sentences_capitalized': 0,
+            'grammar_corrections': 0
         }
-    
-    def reload_dictionary(self):
-        """Перезагружает словарь замен"""
-        self.replacement_dict.reload()
-        self.logger(f"🔄 Словарь замен перезагружен: {self.replacement_dict.get_count()} записей", "info")

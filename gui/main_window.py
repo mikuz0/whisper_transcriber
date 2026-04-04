@@ -14,11 +14,11 @@ from PyQt5.QtCore import QThreadPool
 
 from gui.directory_panel import DirectoryPanel
 from gui.stats_panel import StatsPanel
-from gui.settings_panel import SettingsPanel
 from gui.control_buttons import ControlButtons
 from gui.log_widget import LogWidget
 from gui.progress_widget import ProgressWidget
 from gui.dialogs import ConfirmationDialogs
+from gui.dialogs import SettingsDialog
 from gui.workers import PrepareWorker, TranscribeWorker, PostprocessWorker, FullProcessWorker
 from gui.process_handlers import ProcessHandlers
 
@@ -40,9 +40,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Whisper Transcriber - Распознавание речи")
         self.setMinimumSize(900, 700)
         
+        # Виджеты (без панели настроек)
         self.directory_panel = DirectoryPanel()
         self.stats_panel = StatsPanel()
-        self.settings_panel = SettingsPanel(self.config)
         self.control_buttons = ControlButtons()
         self.progress_widget = ProgressWidget()
         self.log_widget = LogWidget()
@@ -63,7 +63,6 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
         layout.addWidget(self.directory_panel)
         layout.addWidget(self.stats_panel)
-        layout.addWidget(self.settings_panel)
         layout.addWidget(self.control_buttons)
         layout.addWidget(self.progress_widget)
         layout.addWidget(self.log_widget)
@@ -91,28 +90,36 @@ class MainWindow(QMainWindow):
         exit_action.setShortcut("Ctrl+Q")
         file_menu.addAction(exit_action)
         
+        # Меню Настройки
+        settings_menu = menubar.addMenu("Настройки")
+        
+        # Общие настройки
+        general_action = QAction("Общие настройки", self)
+        general_action.triggered.connect(self.open_settings)
+        general_action.setShortcut("Ctrl+,")
+        settings_menu.addAction(general_action)
+        
+        settings_menu.addSeparator()
+        
+        # Быстрый доступ к отдельным настройкам
+        model_action = QAction("Модель Whisper", self)
+        model_action.triggered.connect(lambda: self.open_settings_tab(0))
+        settings_menu.addAction(model_action)
+        
+        formats_action = QAction("Форматы вывода", self)
+        formats_action.triggered.connect(lambda: self.open_settings_tab(1))
+        settings_menu.addAction(formats_action)
+        
+        postprocess_action = QAction("Постобработка", self)
+        postprocess_action.triggered.connect(lambda: self.open_settings_tab(2))
+        settings_menu.addAction(postprocess_action)
+        
         # Меню Инструменты
         tools_menu = menubar.addMenu("Инструменты")
         
-        # Пункт: Редактор словаря замен
         editor_action = QAction("Редактор словаря замен", self)
         editor_action.triggered.connect(self.open_replacement_editor)
-        editor_action.setStatusTip("Открыть редактор для управления словарём замен")
         tools_menu.addAction(editor_action)
-        
-        # Разделитель
-        tools_menu.addSeparator()
-        
-        # Пункт: Перезагрузить словарь
-        reload_action = QAction("Перезагрузить словарь замен", self)
-        reload_action.triggered.connect(self.reload_dictionary)
-        reload_action.setStatusTip("Перезагрузить словарь замен из файла")
-        tools_menu.addAction(reload_action)
-        
-        # Статус словаря
-        self.dict_status_action = QAction("", self)
-        self.dict_status_action.setEnabled(False)
-        tools_menu.addAction(self.dict_status_action)
         
         # Меню Справка
         help_menu = menubar.addMenu("Справка")
@@ -120,9 +127,21 @@ class MainWindow(QMainWindow):
         about_action = QAction("О программе", self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
-        
-        # Обновляем статус словаря
-        self.update_dict_status()
+    
+    def open_settings(self):
+        """Открывает окно настроек"""
+        dialog = SettingsDialog(self.config, self)
+        if dialog.exec_():
+            self.logger.info("Настройки сохранены")
+            self.update_dict_status()
+    
+    def open_settings_tab(self, tab_index: int):
+        """Открывает окно настроек на определённой вкладке"""
+        dialog = SettingsDialog(self.config, self)
+        dialog.tab_widget.setCurrentIndex(tab_index)
+        if dialog.exec_():
+            self.logger.info("Настройки сохранены")
+            self.update_dict_status()
     
     def open_replacement_editor(self):
         """Открывает редактор словаря замен"""
@@ -144,44 +163,25 @@ class MainWindow(QMainWindow):
             self.logger.error(f"Не удалось открыть редактор: {e}")
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть редактор:\n{e}")
     
-    def reload_dictionary(self):
-        """Перезагружает словарь замен"""
-        if hasattr(self, 'current_worker') and self.current_worker and self.current_worker.isRunning():
-            self.logger.warning("Словарь нельзя перезагрузить во время выполнения задачи")
-            QMessageBox.warning(
-                self, "Невозможно перезагрузить",
-                "Словарь нельзя перезагрузить во время выполнения задачи.\n"
-                "Дождитесь завершения текущей операции."
-            )
-            return
-        
-        # Обновляем статус словаря
-        self.update_dict_status()
-        self.logger.info("🔄 Словарь замен будет использован при следующей постобработке")
-    
     def update_dict_status(self):
-        """Обновляет статус словаря в меню"""
+        """Обновляет статус словаря (для меню)"""
         dict_path = Path(__file__).parent.parent / "data" / "replacement_dict.json"
-        
         if dict_path.exists():
             try:
                 with open(dict_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     count = len(data)
-                self.dict_status_action.setText(f"📖 Словарь замен: {count} записей")
-            except Exception as e:
-                self.dict_status_action.setText("📖 Словарь: ошибка чтения")
-                self.logger.warning(f"Ошибка чтения словаря: {e}")
-        else:
-            self.dict_status_action.setText("📖 Словарь: не найден")
-            self.logger.warning(f"Словарь замен не найден: {dict_path}")
+                # Статус показываем в строке состояния
+                self.statusBar().showMessage(f"Словарь замен: {count} записей", 3000)
+            except:
+                pass
     
     def show_about(self):
         """Показывает диалог "О программе" """
         QMessageBox.about(
             self, "О программе",
             "Whisper Transcriber\n\n"
-            "Версия: 1.0.0\n\n"
+            "Версия: 2.0.0\n\n"
             "Программа для распознавания речи из видео и аудио файлов\n"
             "с использованием OpenAI Whisper.\n\n"
             "Функции:\n"
@@ -189,7 +189,8 @@ class MainWindow(QMainWindow):
             "• Распознавание речи\n"
             "• Постобработка текста\n"
             "• Поддержка множества форматов вывода\n"
-            "• Редактируемый словарь замен\n\n"
+            "• Редактируемый словарь замен\n"
+            "• Гибкая настройка порядка действий\n\n"
             "© 2024"
         )
     
@@ -229,7 +230,7 @@ class MainWindow(QMainWindow):
         self.stats_panel.set_work_directory(work_dir)
         self.logger.info(f"Рабочая директория установлена: {work_dir}")
     
-    # ==================== ПОДГОТОВКА ====================
+    # ==================== ЗАПУСК ПРОЦЕССОВ ====================
     
     def start_prepare(self):
         """Запускает этап подготовки файлов"""
@@ -260,8 +261,6 @@ class MainWindow(QMainWindow):
         self.current_worker.start()
         self.logger.info("🚀 Начат этап подготовки файлов...")
     
-    # ==================== РАСПОЗНАВАНИЕ ====================
-    
     def start_transcribe(self):
         """Запускает этап распознавания"""
         work_dir = self.directory_panel.get_directory()
@@ -277,9 +276,9 @@ class MainWindow(QMainWindow):
             self.dialogs.show_warning("Ошибка", "Нет WAV файлов в audio_cache. Сначала выполните подготовку.")
             return
         
-        model = self.settings_panel.get_model()
-        language = self.settings_panel.get_language()
-        output_format = self.settings_panel.get_output_format()
+        # Получаем настройки из конфига
+        model = self.config.get('whisper_model', 'base')
+        output_formats = self.config.get('output_formats', ['txt'])
         
         force_overwrite = self.dialogs.ask_transcribe_confirmation()
         if force_overwrite is None:
@@ -289,8 +288,10 @@ class MainWindow(QMainWindow):
         if ram_warning:
             self.logger.warning(ram_warning)
         
+        # Для каждого формата создаём отдельный воркер? Нет, один воркер обработает все форматы
+        # Передаём список форматов в воркер
         self.current_worker = TranscribeWorker(
-            work_path, model, language, output_format, force_overwrite
+            work_path, model, output_formats, force_overwrite
         )
         self.current_worker.signals.progress.connect(self.on_transcribe_progress)
         self.current_worker.signals.finished.connect(self.on_transcribe_finished)
@@ -299,9 +300,7 @@ class MainWindow(QMainWindow):
         
         self.process_handlers.start_process(self.control_buttons, self.progress_widget)
         self.current_worker.start()
-        self.logger.info(f"🚀 Начат этап распознавания (модель: {model}, язык: {language})...")
-    
-    # ==================== ПОСТОБРАБОТКА ====================
+        self.logger.info(f"🚀 Начат этап распознавания (модель: {model}, форматы: {', '.join(output_formats)})...")
     
     def start_postprocess(self):
         """Запускает этап постобработки"""
@@ -318,13 +317,17 @@ class MainWindow(QMainWindow):
             self.dialogs.show_warning("Ошибка", "Нет текстовых файлов в папке text. Сначала выполните распознавание.")
             return
         
-        postprocess_level = self.settings_panel.get_postprocess_level()
+        # Получаем настройки постобработки
+        postprocess_actions = self.config.get('postprocess_actions', ['cleanup', 'replacement_dict'])
+        postprocess_order = self.config.get('postprocess_order', ['cleanup', 'replacement_dict'])
         
         force_overwrite = self.dialogs.ask_postprocess_confirmation()
         if force_overwrite is None:
             return
         
-        self.current_worker = PostprocessWorker(work_path, postprocess_level, force_overwrite)
+        self.current_worker = PostprocessWorker(
+            work_path, postprocess_actions, postprocess_order, force_overwrite
+        )
         self.current_worker.signals.progress.connect(self.on_postprocess_progress)
         self.current_worker.signals.finished.connect(self.on_postprocess_finished)
         self.current_worker.signals.log.connect(self.logger.log)
@@ -332,9 +335,7 @@ class MainWindow(QMainWindow):
         
         self.process_handlers.start_process(self.control_buttons, self.progress_widget)
         self.current_worker.start()
-        self.logger.info(f"📝 Начат этап постобработки (уровень: {postprocess_level})...")
-    
-    # ==================== ПОЛНЫЙ ПРОЦЕСС ====================
+        self.logger.info(f"📝 Начат этап постобработки (действия: {', '.join(postprocess_actions)})...")
     
     def start_full_process(self):
         """Запускает полный процесс (подготовка + распознавание + постобработка)"""
@@ -351,10 +352,10 @@ class MainWindow(QMainWindow):
             self.dialogs.show_warning("Ошибка", "Папка video_audio пуста или не существует")
             return
         
-        model = self.settings_panel.get_model()
-        language = self.settings_panel.get_language()
-        output_format = self.settings_panel.get_output_format()
-        postprocess_level = self.settings_panel.get_postprocess_level()
+        model = self.config.get('whisper_model', 'base')
+        output_formats = self.config.get('output_formats', ['txt'])
+        postprocess_actions = self.config.get('postprocess_actions', ['cleanup', 'replacement_dict'])
+        postprocess_order = self.config.get('postprocess_order', ['cleanup', 'replacement_dict'])
         
         force_overwrite = self.dialogs.ask_full_confirmation()
         if force_overwrite is None:
@@ -365,7 +366,8 @@ class MainWindow(QMainWindow):
             self.logger.warning(ram_warning)
         
         self.current_worker = FullProcessWorker(
-            work_path, model, language, output_format, force_overwrite, postprocess_level
+            work_path, model, output_formats, force_overwrite,
+            postprocess_actions, postprocess_order
         )
         self.current_worker.signals.progress.connect(self.on_full_progress)
         self.current_worker.signals.finished.connect(self.on_full_finished)
@@ -374,37 +376,31 @@ class MainWindow(QMainWindow):
         
         self.process_handlers.start_process(self.control_buttons, self.progress_widget)
         self.current_worker.start()
-        self.logger.info(f"🚀 Начат полный процесс (модель: {model}, язык: {language}, постобработка: {postprocess_level})...")
+        self.logger.info(f"🚀 Начат полный процесс (модель: {model}, форматы: {', '.join(output_formats)})...")
     
     # ==================== ОБРАБОТЧИКИ ПРОГРЕССА ====================
     
     def on_prepare_progress(self, filename: str, current: int, total: int):
-        """Обновляет прогресс подготовки"""
         self.progress_widget.update_progress(current, total, f"Подготовка: {filename}")
     
     def on_transcribe_progress(self, filename: str, current: int, total: int):
-        """Обновляет прогресс распознавания"""
         self.progress_widget.update_progress(current, total, f"Распознавание: {filename}")
     
     def on_postprocess_progress(self, filename: str, current: int, total: int):
-        """Обновляет прогресс постобработки"""
         self.progress_widget.update_progress(current, total, f"Постобработка: {filename}")
     
     def on_full_progress(self, filename: str, current: int, total: int):
-        """Обновляет прогресс полного процесса"""
         self.progress_widget.update_progress(current, total, f"{filename}")
     
     # ==================== ОБРАБОТЧИКИ ЗАВЕРШЕНИЯ ====================
     
     def on_prepare_finished(self, successful: list, failed: list):
-        """Завершение подготовки"""
         self.process_handlers.finish_process(self.control_buttons, self.progress_widget, self.stats_panel)
         self.logger.info(f"✅ Подготовка завершена. Успешно: {len(successful)}, Ошибок: {len(failed)}")
         if failed:
             self.logger.warning(f"Не удалось обработать: {', '.join(failed[:5])}")
     
     def on_transcribe_finished(self, successful: list, failed: list):
-        """Завершение распознавания"""
         self.process_handlers.finish_process(self.control_buttons, self.progress_widget, self.stats_panel)
         self.logger.info(f"✅ Распознавание завершено. Успешно: {len(successful)}, Ошибок: {len(failed)}")
         self.logger.info(f"📁 Сырые тексты сохранены в папке 'text/'")
@@ -412,7 +408,6 @@ class MainWindow(QMainWindow):
             self.logger.warning(f"Не удалось распознать: {', '.join(failed[:5])}")
     
     def on_postprocess_finished(self, successful: list, failed: list):
-        """Завершение постобработки"""
         self.process_handlers.finish_process(self.control_buttons, self.progress_widget, self.stats_panel)
         self.logger.info(f"✅ Постобработка завершена. Успешно: {len(successful)}, Ошибок: {len(failed)}")
         self.logger.info(f"📁 Обработанные тексты сохранены в папке 'text_processed/'")
@@ -420,7 +415,6 @@ class MainWindow(QMainWindow):
             self.logger.warning(f"Не удалось обработать: {', '.join(failed[:5])}")
     
     def on_full_finished(self, successful: list, failed: list):
-        """Завершение полного процесса"""
         self.process_handlers.finish_process(self.control_buttons, self.progress_widget, self.stats_panel)
         self.logger.info(f"✅ Полный процесс завершен. Успешно: {len(successful)}, Ошибок: {len(failed)}")
         self.logger.info(f"📁 Сырые тексты: 'text/', обработанные: 'text_processed/'")
@@ -428,7 +422,6 @@ class MainWindow(QMainWindow):
             self.logger.warning(f"Не удалось обработать: {', '.join(failed[:5])}")
     
     def closeEvent(self, event):
-        """Обработка закрытия окна"""
         if self.current_worker and self.current_worker.isRunning():
             reply = QMessageBox.question(
                 self, "Выполняется задача",

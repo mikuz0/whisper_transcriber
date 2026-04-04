@@ -1,10 +1,5 @@
 """
 srt_processor.py - Специализированная обработка SRT субтитров
-Выполняет:
-- Парсинг SRT файлов
-- Слияние коротких блоков для читаемости
-- Постобработку текста
-- Корректное форматирование таймкодов
 """
 
 import re
@@ -78,9 +73,8 @@ class SRTProcessor:
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(output_content)
             
-            # Подсчитываем статистику
-            original_blocks = len(blocks)
-            merged_count = original_blocks - len(merged_blocks)
+            original_count = len(blocks)
+            merged_count = original_count - len(merged_blocks)
             
             message = f"Обработан SRT: {Path(input_path).name} (слито {merged_count} блоков)"
             return True, message
@@ -91,11 +85,6 @@ class SRTProcessor:
     def _parse_srt(self, content: str) -> List[Dict]:
         """
         Парсит SRT файл в список блоков
-        
-        Формат блока:
-        1
-        00:00:01,000 --> 00:00:04,000
-        Текст субтитра
         
         Returns:
             список блоков с ключами: index, start, end, text
@@ -154,12 +143,6 @@ class SRTProcessor:
         - Блок короче MIN_BLOCK_DURATION секунд
         - Блок содержит меньше MIN_WORDS_COUNT слов
         - НЕ сливаем, если текущий блок заканчивается на точку, ! или ?
-        
-        Args:
-            blocks: список исходных блоков
-            
-        Returns:
-            список блоков после слияния
         """
         if not blocks:
             return blocks
@@ -237,31 +220,12 @@ class SRTProcessor:
     
     @staticmethod
     def _time_to_seconds(hours: str, minutes: str, seconds: str, millis: str) -> float:
-        """
-        Преобразует время из формата SRT в секунды
-        
-        Args:
-            hours: часы (HH)
-            minutes: минуты (MM)
-            seconds: секунды (SS)
-            millis: миллисекунды (mmm)
-            
-        Returns:
-            время в секундах (float)
-        """
+        """Преобразует время из формата SRT в секунды"""
         return int(hours) * 3600 + int(minutes) * 60 + int(seconds) + int(millis) / 1000
     
     @staticmethod
     def _seconds_to_time(seconds: float) -> str:
-        """
-        Преобразует секунды в формат SRT: HH:MM:SS,mmm
-        
-        Args:
-            seconds: время в секундах
-            
-        Returns:
-            строка в формате SRT
-        """
+        """Преобразует секунды в формат SRT: HH:MM:SS,mmm"""
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         secs = int(seconds % 60)
@@ -270,16 +234,7 @@ class SRTProcessor:
     
     @staticmethod
     def _wrap_text(text: str, width: int) -> str:
-        """
-        Разбивает длинный текст на строки по width символов
-        
-        Args:
-            text: исходный текст
-            width: максимальная ширина строки в символах
-            
-        Returns:
-            текст с переносами строк
-        """
+        """Разбивает длинный текст на строки по width символов"""
         words = text.split()
         lines = []
         current_line = []
@@ -302,16 +257,7 @@ class SRTProcessor:
         return '\n'.join(lines)
     
     def get_merge_stats(self, original_blocks: int, merged_blocks: int) -> Dict[str, int]:
-        """
-        Возвращает статистику слияния блоков
-        
-        Args:
-            original_blocks: исходное количество блоков
-            merged_blocks: количество блоков после слияния
-            
-        Returns:
-            словарь со статистикой
-        """
+        """Возвращает статистику слияния блоков"""
         return {
             'original': original_blocks,
             'merged': merged_blocks,
