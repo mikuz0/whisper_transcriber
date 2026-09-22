@@ -297,8 +297,8 @@ class ReplacementEditor(QMainWindow):
             
             from core.postprocessor.replacement_dict import ReplacementDictionary
             
-            # Создаём временный словарь и сохраняем его (автоматически синхронизирует)
-            temp_dict = ReplacementDictionary()
+            # Создаём временный словарь - передаём заглушку для logger_callback
+            temp_dict = ReplacementDictionary(logger_callback=lambda msg, level: None)
             temp_dict.data = self.data.copy()
             temp_dict.save()
             

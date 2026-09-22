@@ -1,18 +1,17 @@
 # Whisper Transcriber
 
-GUI приложение для распознавания речи из видео/аудио файлов с использованием OpenAI Whisper.
+Распознавание речи из видео и аудио файлов с использованием OpenAI Whisper.
 
-## Установка
+## Быстрый старт
 
-1. Установите Python 3.8+
-2. Установите ffmpeg (обязательно!):
-   - Windows: скачайте с https://ffmpeg.org/download.html и добавьте в PATH
-   - Linux: `sudo apt install ffmpeg`
-   - Mac: `brew install ffmpeg`
-
-3. Установите зависимости:
+### Установка
 ```bash
-pip install -r requirements.txt
+./install.sh
 
+pyinstaller --onefile --noconsole \
+    --add-data "$(python -c 'import whisper, os; print(os.path.dirname(whisper.__file__))'):whisper" \
+    main.py
+  
+  Исправление проблем с меню:
 
-https://mkuznecov.ru/
+    QT_QPA_PLATFORM=xcb ./dist/main

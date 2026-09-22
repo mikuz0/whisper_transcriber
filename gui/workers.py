@@ -13,9 +13,9 @@ from utils.validators import Validators
 
 class WorkerSignals(QObject):
     """Сигналы для воркеров"""
-    finished = pyqtSignal(object, object)
-    progress = pyqtSignal(str, int, int)
-    log = pyqtSignal(str, str)
+    finished = pyqtSignal(object, object)  # (successful_list, failed_list)
+    progress = pyqtSignal(str, int, int)   # (filename, current, total)
+    log = pyqtSignal(str, str)             # (message, level)
 
 
 class PrepareWorker(QThread):
@@ -28,6 +28,7 @@ class PrepareWorker(QThread):
         self.signals = WorkerSignals()
     
     def run(self):
+        """Запуск подготовки в отдельном потоке"""
         source_dir = self.work_dir / 'video_audio'
         cache_dir = self.work_dir / 'audio_cache'
         
@@ -58,6 +59,7 @@ class TranscribeWorker(QThread):
         self.signals = WorkerSignals()
     
     def run(self):
+        """Запуск распознавания в отдельном потоке"""
         cache_dir = self.work_dir / 'audio_cache'
         text_dir = self.work_dir / 'text'
         
@@ -66,8 +68,6 @@ class TranscribeWorker(QThread):
         def log_callback(msg, level='info'):
             self.signals.log.emit(msg, level)
         
-        # Для каждого формата создаём отдельный файл
-        # Но распознаём один раз, потом сохраняем в разные форматы
         transcriber = WhisperTranscriber(log_callback)
         
         def progress_callback(filename, current, total):
@@ -91,18 +91,20 @@ class TranscribeWorker(QThread):
             
             if not success:
                 failed.append(wav_path.name)
-                self.signals.log.emit(f"✗ {result}", "error")
+                error_msg = result.get('error', 'Неизвестная ошибка') if isinstance(result, dict) else str(result)
+                self.signals.log.emit(f"✗ {error_msg}", "error")
                 continue
             
             # Сохраняем в каждый выбранный формат
             for fmt in self.output_formats:
-                output_path = text_dir / f"{wav_path.stem}.{transcriber._get_extension(fmt)}"
+                ext = transcriber._get_extension(fmt)
+                output_path = text_dir / f"{wav_path.stem}.{ext}"
                 
                 if output_path.exists() and not self.force_overwrite:
                     self.signals.log.emit(f"⏭️  Пропущен (уже есть): {output_path.name}", "warning")
                     continue
                 
-                saved = transcriber._save_transcription(result, output_path, fmt, wav_path.stem)
+                transcriber._save_transcription(result, output_path, fmt, wav_path.stem)
                 self.signals.log.emit(f"✓ Сохранено: {output_path.name}", "success")
             
             successful.append(wav_path.name)
@@ -113,15 +115,19 @@ class TranscribeWorker(QThread):
 class PostprocessWorker(QThread):
     """Воркер для этапа постобработки текстов (гибкая конфигурация)"""
     
-    def __init__(self, work_dir: Path, actions: list, order: list, force_overwrite: bool):
+    def __init__(self, work_dir: Path, actions: list, order: list, 
+                 force_overwrite: bool, interactive: bool = False, parent=None):
         super().__init__()
         self.work_dir = work_dir
         self.actions = actions
         self.order = order
         self.force_overwrite = force_overwrite
+        self.interactive = interactive
+        self.parent_window = parent  # Сохраняем родительское окно
         self.signals = WorkerSignals()
     
     def run(self):
+        """Запуск постобработки в отдельном потоке"""
         source_dir = self.work_dir / 'text'
         target_dir = self.work_dir / 'text_processed'
         
@@ -167,21 +173,28 @@ class PostprocessWorker(QThread):
                 continue
             
             try:
-                if file_path.suffix.lower() == '.srt':
-                    success, message = srt_processor.process_srt_file(
-                        str(file_path), str(output_path)
+                if self.interactive:
+                    # Интерактивный режим - передаём родительское окно
+                    success, message = postprocessor.process_file_interactive(
+                        file_path, output_path, parent=self.parent_window
                     )
                 else:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    
-                    processed = postprocessor.process(content)
-                    
-                    with open(output_path, 'w', encoding='utf-8') as f:
-                        f.write(processed)
-                    
-                    success = True
-                    message = f"Обработан: {file_path.name}"
+                    # Автоматический режим
+                    if file_path.suffix.lower() == '.srt':
+                        success, message = srt_processor.process_srt_file(
+                            str(file_path), str(output_path)
+                        )
+                    else:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        
+                        processed = postprocessor.process(content)
+                        
+                        with open(output_path, 'w', encoding='utf-8') as f:
+                            f.write(processed)
+                        
+                        success = True
+                        message = f"Обработан: {file_path.name}"
                 
                 if success:
                     successful.append(file_path.name)
@@ -196,21 +209,24 @@ class PostprocessWorker(QThread):
         
         stats = postprocessor.get_stats()
         if successful:
-            self.signals.log.emit(
-                f"📊 Статистика постобработки: обработано {stats['processed']} файлов, "
-                f"исправлено слов: {stats['words_changed']}, "
-                f"исправлено предложений: {stats['sentences_capitalized']}",
-                "info"
-            )
+            msg = f"📊 Статистика постобработки: обработано {stats['processed']} файлов"
+            if stats['words_changed'] > 0:
+                msg += f", исправлено слов: {stats['words_changed']}"
+            if stats['sentences_capitalized'] > 0:
+                msg += f", исправлено предложений: {stats['sentences_capitalized']}"
+            if stats['grammar_corrections'] > 0:
+                msg += f", грамматических исправлений: {stats['grammar_corrections']}"
+            self.signals.log.emit(msg, "info")
         
         self.signals.finished.emit(successful, failed)
 
 
 class FullProcessWorker(QThread):
-    """Воркер для полного процесса"""
+    """Воркер для полного процесса (подготовка + распознавание + постобработка)"""
     
     def __init__(self, work_dir: Path, model: str, output_formats: list,
-                 force_overwrite: bool, postprocess_actions: list, postprocess_order: list):
+                 force_overwrite: bool, postprocess_actions: list, 
+                 postprocess_order: list, interactive: bool = False, parent=None):
         super().__init__()
         self.work_dir = work_dir
         self.model = model
@@ -218,9 +234,12 @@ class FullProcessWorker(QThread):
         self.force_overwrite = force_overwrite
         self.postprocess_actions = postprocess_actions
         self.postprocess_order = postprocess_order
+        self.interactive = interactive
+        self.parent_window = parent
         self.signals = WorkerSignals()
     
     def run(self):
+        """Запуск полного процесса в отдельном потоке"""
         source_dir = self.work_dir / 'video_audio'
         cache_dir = self.work_dir / 'audio_cache'
         text_dir = self.work_dir / 'text'
@@ -260,17 +279,22 @@ class FullProcessWorker(QThread):
             
             if not success:
                 failed_trans.append(wav_path.name)
+                error_msg = result.get('error', 'Неизвестная ошибка') if isinstance(result, dict) else str(result)
+                self.signals.log.emit(f"✗ {error_msg}", "error")
                 continue
             
             for fmt in self.output_formats:
-                output_path = text_dir / f"{wav_path.stem}.{transcriber._get_extension(fmt)}"
+                ext = transcriber._get_extension(fmt)
+                output_path = text_dir / f"{wav_path.stem}.{ext}"
                 transcriber._save_transcription(result, output_path, fmt, wav_path.stem)
+                self.signals.log.emit(f"✓ Сохранено: {output_path.name}", "success")
             
             successful_trans.append(wav_path.name)
         
         if not successful_trans:
             self.signals.log.emit("❌ Нет успешно распознанных файлов", "error")
-            self.signals.finished.emit([], failed_prep + failed_trans)
+            all_failed = list(set(failed_prep + failed_trans))
+            self.signals.finished.emit([], all_failed)
             return
         
         # ==================== ЭТАП 3: ПОСТОБРАБОТКА ====================
@@ -299,20 +323,27 @@ class FullProcessWorker(QThread):
                 continue
             
             try:
-                if file_path.suffix.lower() == '.srt':
-                    success, _ = srt_processor.process_srt_file(
-                        str(file_path), str(output_path)
+                if self.interactive:
+                    # Интерактивный режим - передаём родительское окно
+                    success, _ = postprocessor.process_file_interactive(
+                        file_path, output_path, parent=self.parent_window
                     )
                 else:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    
-                    processed = postprocessor.process(content)
-                    
-                    with open(output_path, 'w', encoding='utf-8') as f:
-                        f.write(processed)
-                    
-                    success = True
+                    # Автоматический режим
+                    if file_path.suffix.lower() == '.srt':
+                        success, _ = srt_processor.process_srt_file(
+                            str(file_path), str(output_path)
+                        )
+                    else:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        
+                        processed = postprocessor.process(content)
+                        
+                        with open(output_path, 'w', encoding='utf-8') as f:
+                            f.write(processed)
+                        
+                        success = True
                 
                 if success:
                     successful_post.append(file_path.name)
@@ -321,6 +352,18 @@ class FullProcessWorker(QThread):
                     
             except Exception as e:
                 failed_post.append(file_path.name)
+                self.signals.log.emit(f"✗ Ошибка {file_path.name}: {str(e)}", "error")
+        
+        stats = postprocessor.get_stats()
+        if successful_post:
+            msg = f"📊 Статистика постобработки: обработано {stats['processed']} файлов"
+            if stats['words_changed'] > 0:
+                msg += f", исправлено слов: {stats['words_changed']}"
+            if stats['sentences_capitalized'] > 0:
+                msg += f", исправлено предложений: {stats['sentences_capitalized']}"
+            if stats['grammar_corrections'] > 0:
+                msg += f", грамматических исправлений: {stats['grammar_corrections']}"
+            self.signals.log.emit(msg, "info")
         
         all_failed = list(set(failed_prep + failed_trans + failed_post))
         self.signals.finished.emit(successful_post, all_failed)

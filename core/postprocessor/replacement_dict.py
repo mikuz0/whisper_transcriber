@@ -10,9 +10,7 @@ from typing import Dict, Optional, List, Tuple
 
 
 class ReplacementDictionary:
-    """
-    Словарь замен для исправления типичных ошибок распознавания
-    """
+    """Словарь замен для исправления типичных ошибок распознавания"""
     
     def __init__(self, logger_callback=None, lt_tool=None):
         self.logger = logger_callback or print
@@ -38,9 +36,10 @@ class ReplacementDictionary:
         
         for version_dir in cache_dir.glob("LanguageTool-*"):
             rules_path = version_dir / "org" / "languagetool" / "rules" / "ru" / "user_rules.xml"
-            if rules_path.parent.exists() or version_dir == list(cache_dir.glob("LanguageTool-*"))[0]:
+            if rules_path.parent.exists():
                 return rules_path
         
+        # Создаём путь по умолчанию
         default_path = cache_dir / "LanguageTool-6.4" / "org" / "languagetool" / "rules" / "ru" / "user_rules.xml"
         default_path.parent.mkdir(parents=True, exist_ok=True)
         return default_path
@@ -80,11 +79,9 @@ class ReplacementDictionary:
         return xml
     
     def _update_ignore_file(self) -> bool:
-        """Обновляет файл ignore.txt для LanguageTool"""
         try:
             ignore_path = self._get_ignore_file_path()
             
-            # Собираем все уникальные правильные слова
             correct_words = set(self.data.values())
             
             existing_words = set()
@@ -106,12 +103,9 @@ class ReplacementDictionary:
             return False
     
     def _sync_with_languagetool(self) -> bool:
-        """Синхронизирует словарь с локальным LanguageTool"""
         try:
-            # 1. Обновляем ignore.txt
             self._update_ignore_file()
             
-            # 2. Генерируем XML правила
             rules_xml = self._generate_rules_xml()
             rules_path = self._get_rules_path()
             rules_path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +121,6 @@ class ReplacementDictionary:
             return False
     
     def _load(self):
-        """Загружает словарь из JSON-файла"""
         try:
             if self.dict_path.exists():
                 with open(self.dict_path, 'r', encoding='utf-8') as f:
@@ -144,7 +137,6 @@ class ReplacementDictionary:
             self.data = {}
     
     def save(self) -> bool:
-        """Сохраняет словарь в JSON-файл и синхронизирует с LanguageTool"""
         try:
             self.dict_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.dict_path, 'w', encoding='utf-8') as f:
@@ -160,12 +152,10 @@ class ReplacementDictionary:
             return False
     
     def reload(self):
-        """Перезагружает словарь из файла и синхронизирует"""
         self._load()
         self._sync_with_languagetool()
     
     def apply(self, text: str) -> str:
-        """Применяет все замены из словаря к тексту"""
         if not text or not self.data:
             return text
         

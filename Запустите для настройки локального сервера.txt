@@ -1,5 +1,0 @@
-# Установить локальный сервер
-python check_languagetool.py --setup-local
-
-# Или полная проверка с установкой
-python check_languagetool.py

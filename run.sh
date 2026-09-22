@@ -1,8 +1,12 @@
 #!/bin/bash
-# Скрипт для запуска программы
+# run.sh - Запуск Whisper Transcriber
+
+# Получаем директорию скрипта
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/myenv/bin/activate"
-echo "Окружение активировано"
-echo "Запуск программы..."
+cd "$SCRIPT_DIR"
+
+# Активация окружения
+source myenv/bin/activate
+
+# Запуск программы
 python main.py
-deactivate

@@ -23,27 +23,28 @@ class AudioPreparer:
         """
         Args:
             cache_dir: путь к папке audio_cache
-            logger_callback: функция для логирования (опционально)
+            logger_callback: функция для логирования
         """
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.logger = logger_callback or print
         
         # Проверяем наличие ffmpeg
-        self._check_ffmpeg()
+        self.ffmpeg_available = self._check_ffmpeg()
     
-    def _check_ffmpeg(self):
+    def _check_ffmpeg(self) -> bool:
         """Проверяет доступность ffmpeg в системе"""
         try:
-            subprocess.run(['ffmpeg', '-version'], 
-                          stdout=subprocess.DEVNULL, 
-                          stderr=subprocess.DEVNULL, 
-                          check=True)
-            self.ffmpeg_available = True
-        except (subprocess.SubprocessError, FileNotFoundError):
+            result = subprocess.run(['ffmpeg', '-version'], 
+                                  stdout=subprocess.DEVNULL, 
+                                  stderr=subprocess.DEVNULL, 
+                                  check=True,
+                                  timeout=5)
+            return True
+        except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
             self.logger("⚠️  ВНИМАНИЕ: ffmpeg не найден в системе!", "warning")
-            self.logger("   Установите ffmpeg: https://ffmpeg.org/download.html", "warning")
-            self.ffmpeg_available = False
+            self.logger("   Установите ffmpeg: sudo apt install ffmpeg", "warning")
+            return False
     
     def get_audio_duration(self, file_path: str) -> Optional[float]:
         """Получает длительность аудио/видео файла в секундах"""
@@ -62,7 +63,6 @@ class AudioPreparer:
                        overwrite: bool = False) -> Tuple[bool, str]:
         """
         Конвертирует файл в WAV (16kHz, mono, PCM)
-        Использует прямой вызов ffmpeg для лучшей совместимости
         
         Returns:
             (success, message)
@@ -79,23 +79,22 @@ class AudioPreparer:
         
         try:
             # Используем прямой вызов ffmpeg для всех типов файлов
-            # Это более надежно, особенно для MP3 с встроенными изображениями
             cmd = [
                 'ffmpeg',
-                '-i', str(input_path),           # входной файл
-                '-vn',                           # отключаем видео (для файлов с обложками)
-                '-ar', '16000',                  # частота 16 kHz
-                '-ac', '1',                      # моно
-                '-c:a', 'pcm_s16le',             # PCM 16-bit
-                '-y' if overwrite else '-n',     # перезапись/не перезапись
+                '-i', str(input_path),
+                '-vn',  # отключаем видео
+                '-ar', '16000',  # частота 16 kHz
+                '-ac', '1',  # моно
+                '-c:a', 'pcm_s16le',  # PCM 16-bit
+                '-y' if overwrite else '-n',
                 str(output_path)
             ]
             
             # Запускаем процесс
             result = subprocess.run(
                 cmd, 
-            capture_output=True, 
-            text=True,
+                capture_output=True, 
+                text=True,
                 timeout=300  # 5 минут таймаут
             )
             
@@ -105,7 +104,7 @@ class AudioPreparer:
             
             # Проверяем, что файл создался и не пустой
             if output_path.exists() and output_path.stat().st_size > 0:
-                return True, f"Успешно сконвертирован: {input_path.name} → {output_path.name}"
+                return True, f"Успешно сконвертирован: {input_path.name}"
             else:
                 return False, f"Ошибка: выходной файл пуст или не создан"
                 
@@ -143,11 +142,10 @@ class AudioPreparer:
         if source_path.suffix.lower() == '.mp3':
             self.logger(f"  Обработка MP3 файла: {filename}", "info")
         
-        # Проверяем длительность (только для предупреждения)
+        # Проверяем длительность
         duration = self.get_audio_duration(str(source_path))
         if duration and duration > 1800:  # 30 минут
-            self.logger(f"⚠️  Файл {filename} длится {duration/60:.1f} минут. "
-                       f"Может потребоваться много RAM.", "warning")
+            self.logger(f"⚠️  Файл {filename} длится {duration/60:.1f} минут. Может потребоваться много RAM.", "warning")
         
         # Конвертируем
         return self.convert_to_wav(str(source_path), str(wav_path), overwrite=force_overwrite)
@@ -156,11 +154,6 @@ class AudioPreparer:
                    progress_callback=None) -> Tuple[List[str], List[str]]:
         """
         Подготавливает все файлы из source_dir
-        
-        Args:
-            source_dir: папка с исходными файлами
-            force_overwrite: перезаписывать существующие WAV
-            progress_callback: функция для обновления прогресса (filename, current, total)
         
         Returns:
             (successful_files, failed_files)
@@ -188,6 +181,7 @@ class AudioPreparer:
                 self.logger(f"✓ {message}", "success")
             else:
                 failed.append(file_path.name)
-                self.logger(f"✗ {message}", "error" if "Ошибка" in message else "warning")
+                level = "error" if "Ошибка" in message or "ffmpeg" in message else "warning"
+                self.logger(f"✗ {message}", level)
         
         return successful, failed

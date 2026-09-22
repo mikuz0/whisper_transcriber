@@ -17,6 +17,7 @@ class ConfigManager:
         'output_formats': ['txt'],
         'postprocess_actions': ['cleanup', 'replacement_dict'],
         'postprocess_order': ['cleanup', 'replacement_dict'],
+        'interactive_mode': False,
         'last_used_tab': 0
     }
     
@@ -25,7 +26,6 @@ class ConfigManager:
         self.config = self.load()
     
     def load(self) -> Dict[str, Any]:
-        """Загружает конфигурацию из файла"""
         if self.config_path.exists():
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
@@ -39,7 +39,6 @@ class ConfigManager:
         return self.DEFAULT_CONFIG.copy()
     
     def save(self, config: Dict[str, Any]) -> bool:
-        """Сохраняет конфигурацию в файл"""
         try:
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
@@ -49,10 +48,24 @@ class ConfigManager:
             return False
     
     def get(self, key: str, default=None):
-        """Получает значение из конфигурации"""
         return self.config.get(key, default)
     
     def set(self, key: str, value):
-        """Устанавливает значение в конфигурации и сохраняет"""
         self.config[key] = value
         self.save(self.config)
+    
+    def get_postprocess_config(self) -> Dict[str, Any]:
+        return {
+            'actions': self.get('postprocess_actions', ['cleanup', 'replacement_dict']),
+            'order': self.get('postprocess_order', ['cleanup', 'replacement_dict'])
+        }
+    
+    def set_postprocess_config(self, actions: list, order: list):
+        self.set('postprocess_actions', actions)
+        self.set('postprocess_order', order)
+    
+    def get_interactive_mode(self) -> bool:
+        return self.get('interactive_mode', False)
+    
+    def set_interactive_mode(self, enabled: bool):
+        self.set('interactive_mode', enabled)

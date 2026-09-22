@@ -4,4 +4,9 @@ from .transcriber import WhisperTranscriber
 from .file_scanner import FileScanner
 from .postprocessor import TextPostprocessor
 
-__all__ = ['AudioPreparer', 'WhisperTranscriber', 'FileScanner', 'TextPostprocessor']
+__all__ = [
+    'AudioPreparer',
+    'WhisperTranscriber',
+    'FileScanner',
+    'TextPostprocessor'
+]

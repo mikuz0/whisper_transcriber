@@ -16,7 +16,7 @@ class FileScanner:
         Возвращает информацию о файлах в директории
         
         Returns:
-            {filename: {'size': int, 'modified': float, 'exists': bool}}
+            {filename: {'size': int, 'modified': float, 'path': str}}
         """
         if not directory.exists():
             return {}
@@ -82,13 +82,27 @@ class FileScanner:
         video_audio_extensions = {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm',
                                    '.mp3', '.wav', '.flac', '.m4a', '.ogg', '.opus', '.aac'}
         
-        return {
-            'video_audio': len([f for f in video_audio_dir.iterdir() 
-                               if f.is_file() and f.suffix.lower() in video_audio_extensions]) if video_audio_dir.exists() else 0,
-            'audio_cache': len([f for f in audio_cache_dir.glob('*.wav') if f.is_file()]) if audio_cache_dir.exists() else 0,
-            'text': len([f for f in text_dir.iterdir() if f.is_file()]) if text_dir.exists() else 0,
-            'text_processed': len([f for f in text_processed_dir.iterdir() if f.is_file()]) if text_processed_dir.exists() else 0
+        counts = {
+            'video_audio': 0,
+            'audio_cache': 0,
+            'text': 0,
+            'text_processed': 0
         }
+        
+        if video_audio_dir.exists():
+            counts['video_audio'] = len([f for f in video_audio_dir.iterdir() 
+                                        if f.is_file() and f.suffix.lower() in video_audio_extensions])
+        
+        if audio_cache_dir.exists():
+            counts['audio_cache'] = len([f for f in audio_cache_dir.glob('*.wav') if f.is_file()])
+        
+        if text_dir.exists():
+            counts['text'] = len([f for f in text_dir.iterdir() if f.is_file()])
+        
+        if text_processed_dir.exists():
+            counts['text_processed'] = len([f for f in text_processed_dir.iterdir() if f.is_file()])
+        
+        return counts
     
     @staticmethod
     def get_file_hash(file_path: Path, chunk_size: int = 8192) -> str:
@@ -133,9 +147,8 @@ class FileScanner:
         if audio_cache_dir.exists():
             for wav_file in audio_cache_dir.glob('*.wav'):
                 original_name = wav_file.stem
-                # Ищем исходный файл с таким же именем
                 found = False
-                for ext in ['.mp4', '.mkv', '.avi', '.mov', '.mp3', '.m4a']:
+                for ext in ['.mp4', '.mkv', '.avi', '.mov', '.mp3', '.m4a', '.wav']:
                     if (video_audio_dir / f"{original_name}{ext}").exists():
                         found = True
                         break
